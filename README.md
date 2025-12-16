@@ -259,6 +259,18 @@ phi_range = 0:5:45;       % 更多的仰角步数
 
 > **注**: 时间取决于计算机CPU性能
 
+### 并行与保存优化说明
+
+- 默认情况下 `main.m` 支持并行化视角再现（`enable_parfor = true`）。并行需要 Parallel Computing Toolbox；程序会尝试自动创建 `parpool`，默认使用系统可用的 worker 数。可通过在 `get_custom_config.m` 中设置 `parpool_size` 指定 worker 数，例如：
+
+```matlab
+config.parpool_size = 4; % 使用4个 worker
+```
+
+- 可通过配置项控制保存行为：`save_every_n_views`（每隔多少视角保存一次图像），`enable_imwrite`（使用更快的 `imwrite` 保存矩阵图像）。
+
+- 为提高保存速度，程序对干涉图和再现像使用 `imwrite` 直接保存矩阵到 PNG；物体模型使用帧捕获并 `imwrite` 保存。
+
 ## 常见问题 (FAQ)
 
 ### Q1: 再现像模糊怎么办？

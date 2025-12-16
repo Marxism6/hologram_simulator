@@ -6,7 +6,7 @@
 function [object_field, object_coords] = create_object(...
     object_center, cube_size, sphere_radius, ...
     object_amplitude, object_phase, ...
-    lambda, pixel_num, holo_size)
+    lambda, pixel_num, holo_size, varargin)
 
     % 参数解包
     center_x = object_center(1);
@@ -16,17 +16,31 @@ function [object_field, object_coords] = create_object(...
     % 物体坐标系范围（相对于中心）
     coord_range = holo_size / 2;
     
-    % 生成立方体表面点
-    cube_density = 30;  % 每个面的采样点数
-    [cube_x, cube_y, cube_z, cube_amp, cube_phase] = generate_cube(...
-        center_x, center_y, center_z, cube_size, ...
-        object_amplitude, object_phase, cube_density);
+    % 解析可选参数（采样密度）
+    p = inputParser;
+    addParameter(p, 'cube_density', 30, @isnumeric);
+    addParameter(p, 'sphere_density', 40, @isnumeric);
+    parse(p, varargin{:});
+    cube_density = p.Results.cube_density;
+    sphere_density = p.Results.sphere_density;
     
-    % 生成球体表面点
-    sphere_density = 40;  % 球面采样点数
-    [sphere_x, sphere_y, sphere_z, sphere_amp, sphere_phase] = generate_sphere(...
-        center_x, center_y, center_z, sphere_radius, ...
-        object_amplitude, object_phase, sphere_density);
+    % 条件生成立方体表面点（cube_size > 0 时生成）
+    if cube_size > 0
+        [cube_x, cube_y, cube_z, cube_amp, cube_phase] = generate_cube(...
+            center_x, center_y, center_z, cube_size, ...
+            object_amplitude, object_phase, cube_density);
+    else
+        cube_x = []; cube_y = []; cube_z = []; cube_amp = []; cube_phase = [];
+    end
+    
+    % 条件生成球体表面点（sphere_radius > 0 时生成）
+    if sphere_radius > 0
+        [sphere_x, sphere_y, sphere_z, sphere_amp, sphere_phase] = generate_sphere(...
+            center_x, center_y, center_z, sphere_radius, ...
+            object_amplitude, object_phase, sphere_density);
+    else
+        sphere_x = []; sphere_y = []; sphere_z = []; sphere_amp = []; sphere_phase = [];
+    end
     
     % 合并所有点
     object_coords.x = [cube_x; sphere_x];

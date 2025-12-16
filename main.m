@@ -12,16 +12,25 @@ k = 2 * pi / lambda;            % 波数
 
 % 物体参数
 object_center = [0, 0, 100e-3]; % 物体中心坐标 (m)
-cube_size = 5e-3;               % 立方体边长 (m)
-sphere_radius = 2e-3;           % 球体半径 (m)
+cube_size = 5e-3;               % 立方体边长 (m)，设为0可禁用立方体
+sphere_radius = 2e-3;           % 球体半径 (m)，设为0可禁用球体
 object_amplitude = 0.8;         % 振幅透射率
 object_phase = pi/4;            % 相位延迟 (rad)
+cube_density = 30;              % 立方体采样密度（每个面），默认30
+sphere_density = 40;            % 球体采样密度，默认40
 
 % 全息记录面参数
 holo_z = 150e-3;                % 全息面到物体的距离 (m)
 holo_size = 50e-3;              % 全息面大小 (m × m)
 pixel_num = 512;                % 采样像素数 (建议512)
 pixel_size = holo_size / pixel_num;  % 像素大小 (m)
+
+% ----------------- 可调运行/保存参数 -----------------
+save_every_n_views = 1;    % 每多少个视角保存一次再现像（1 = 每个都保存）
+enable_parfor = true;      % 是否并行化视角循环（需要 Parallel Computing Toolbox）
+parpool_size = 0;          % parpool 大小：0 = 自动（默认），>0 指定 worker 数
+enable_imwrite = true;     % 是否使用 imwrite 保存矩阵图像（更快）
+% -----------------------------------------------------
 
 % 参考光参数
 theta_ref = 15 * pi/180;        % 参考光方位角 (rad)
@@ -64,9 +73,11 @@ if exist('get_custom_config', 'file') == 2
 
         % 白名单：允许用户覆盖的字段（安全）
         allowed = {'lambda','object_center','cube_size','sphere_radius', ...
-                   'object_amplitude','object_phase','holo_z','holo_size', ...
-                   'pixel_num','theta_ref','phi_ref','theta_range','phi_range', ...
-                   'add_noise','SNR_dB','output_dir'};
+               'object_amplitude','object_phase','holo_z','holo_size', ...
+               'pixel_num','theta_ref','phi_ref','theta_range','phi_range', ...
+               'add_noise','SNR_dB','output_dir', ...
+               'cube_density','sphere_density', ...
+               'diffraction_method','enable_parfor','parpool_size','save_every_n_views','enable_imwrite'};
 
         for ii = 1:length(fn)
             name = fn{ii};
@@ -98,8 +109,36 @@ fprintf('\n【处理中】物体建模...\n');
 [object_field, object_coords] = create_object(...
     object_center, cube_size, sphere_radius, ...
     object_amplitude, object_phase, ...
-    lambda, pixel_num, holo_size);
+    lambda, pixel_num, holo_size, ...
+    'cube_density', cube_density, 'sphere_density', sphere_density);
 fprintf('  ✓ 物体建模完成，点数: %d\n', length(object_coords.x));
+
+% 保存物体模型快照（带时间戳）
+try
+    fig = figure('Visible','off');
+    scatter3(object_coords.x*1e3, object_coords.y*1e3, object_coords.z*1e3, 8, abs(object_field(:)), 'filled');
+    axis equal; xlabel('x (mm)'); ylabel('y (mm)'); zlabel('z (mm)');
+    title('Object model (mm)'); colorbar;
+    drawnow;
+    ts = datestr(now,'yyyy-mm-dd_HH-MM-SS');
+    obj_fn = fullfile(output_dir, ['object_model_' ts '.png']);
+    % 使用 frame capture + imwrite 保存（比 saveas 快，且不依赖显示）
+    try
+        F = getframe(gcf);
+        [I, map] = frame2im(F);
+        if ~isempty(map)
+            I = ind2rgb(I, map);
+        end
+        imwrite(I, obj_fn);
+    catch
+        % 退回到 saveas
+        saveas(fig, obj_fn);
+    end
+    close(fig);
+    fprintf('  ✓ 已保存物体模型图: %s\n', obj_fn);
+catch E
+    fprintf('  Warning: 保存物体模型图失败: %s\n', E.message);
+end
 
 %% 【第3部分】全息生成
 fprintf('\n【处理中】全息图生成...\n');
@@ -127,6 +166,25 @@ fprintf('  ✓ 全息图生成完成\n');
 fprintf('  物光场范围: [%.4f, %.4f]\n', min(abs(object_field_at_holo(:))), max(abs(object_field_at_holo(:))));
 fprintf('  干涉图对比度: %.4f\n', (max(hologram_intensity(:)) - min(hologram_intensity(:))) / mean(hologram_intensity(:)));
 
+% 保存干涉图快照（带时间戳）
+try
+    ts = datestr(now,'yyyy-mm-dd_HH-MM-SS');
+    holo_fn = fullfile(output_dir, ['hologram_intensity_' ts '.png']);
+    if enable_imwrite
+        img = uint8(255 * mat2gray(hologram_intensity));
+        imwrite(img, holo_fn);
+    else
+        fig = figure('Visible','off');
+        imagesc(x_holo*1e3, y_holo*1e3, hologram_intensity); axis image; colormap gray; colorbar;
+        xlabel('x (mm)'); ylabel('y (mm)'); title('Hologram intensity');
+        saveas(fig, holo_fn);
+        close(fig);
+    end
+    fprintf('  ✓ 已保存干涉图: %s\n', holo_fn);
+catch E
+    fprintf('  Warning: 保存干涉图失败: %s\n', E.message);
+end
+
 %% 【第4部分】全息再现 - 多视角
 fprintf('\n【处理中】多视角全息再现...\n');
 
@@ -134,24 +192,119 @@ fprintf('\n【处理中】多视角全息再现...\n');
 reconstructed_images = cell(length(theta_range), length(phi_range));
 reconstructed_coords = cell(length(theta_range), length(phi_range));
 
-for i = 1:length(theta_range)
-    for j = 1:length(phi_range)
-        theta_view = theta_range(i) * pi/180;
-        phi_view = phi_range(j) * pi/180;
-        
-        % 计算再现光场
-        recon_field = compute_reconstruction_field(...
-            theta_view, phi_view, lambda, x_holo, y_holo);
-        
-        % 逆向传播重构物体空间
-        [recon_intensity, recon_coords] = reconstruct_hologram(...
-            hologram_intensity, recon_field, lambda, ...
-            holo_z, pixel_num, holo_size);
-        
-        reconstructed_images{i,j} = recon_intensity;
-        reconstructed_coords{i,j} = recon_coords;
-        
-        fprintf('  ✓ 视角 (θ=%.0f°, φ=%.0f°) 再现完成\n', theta_range(i), phi_range(j));
+% 并行设置
+use_parfor = false;
+pool_created = false;
+if enable_parfor
+    try
+        pct = ver('parallel'); %#ok<VERCHK>
+        % 尝试获得或创建并行池
+        poolobj = gcp('nocreate');
+        if isempty(poolobj)
+            if exist('parpool_size','var') && parpool_size > 0
+                poolobj = parpool(parpool_size);
+            else
+                poolobj = parpool; % 使用默认设置
+            end
+            pool_created = true;
+        end
+        use_parfor = true;
+    catch E
+        fprintf('Warning: 无法启动 parpool，回退为串行执行: %s\n', E.message);
+        use_parfor = false;
+    end
+end
+
+Nt = length(theta_range);
+Np = length(phi_range);
+view_counter = 0;
+
+if use_parfor
+    parfor ii = 1:Nt
+        local_images = cell(1, Np);
+        local_coords = cell(1, Np);
+        for jj = 1:Np
+            i = ii; j = jj;
+            theta_view = theta_range(i) * pi/180;
+            phi_view = phi_range(j) * pi/180;
+
+            recon_field = compute_reconstruction_field(...
+                theta_view, phi_view, lambda, x_holo, y_holo);
+
+            [recon_intensity, recon_coords] = reconstruct_hologram(...
+                hologram_intensity, recon_field, lambda, holo_z, pixel_num, holo_size);
+
+            local_images{j} = recon_intensity;
+            local_coords{j} = recon_coords;
+
+            % 保存依据全局视角计数（近似按顺序命名）
+            view_idx = (i-1)*Np + (j-1);
+            if mod(view_idx, save_every_n_views) == 0
+                try
+                    ts = datestr(now,'yyyy-mm-dd_HH-MM-SS');
+                    recon_fn = fullfile(output_dir, sprintf('recon_theta_%d_phi_%d_%s.png', round(theta_range(i)), round(phi_range(j)), ts));
+                    if enable_imwrite
+                        img = uint8(255 * mat2gray(recon_intensity));
+                        imwrite(img, recon_fn);
+                    else
+                        fig = figure('Visible','off'); imagesc(recon_intensity); axis image; colormap gray; colorbar; saveas(fig, recon_fn); close(fig);
+                    end
+                catch E
+                    fprintf('  Warning: 保存再现像失败: %s\n', E.message);
+                end
+            end
+        end
+        reconstructed_images(ii, :) = local_images;
+        reconstructed_coords(ii, :) = local_coords;
+        fprintf('  ✓ 视角组 %d/%d 完成\n', ii, Nt);
+    end
+else
+    for i = 1:Nt
+        for j = 1:Np
+            theta_view = theta_range(i) * pi/180;
+            phi_view = phi_range(j) * pi/180;
+
+            recon_field = compute_reconstruction_field(...
+                theta_view, phi_view, lambda, x_holo, y_holo);
+
+            [recon_intensity, recon_coords] = reconstruct_hologram(...
+                hologram_intensity, recon_field, lambda, holo_z, pixel_num, holo_size);
+
+            reconstructed_images{i,j} = recon_intensity;
+            reconstructed_coords{i,j} = recon_coords;
+
+            % 保存（按 save_every_n_views 控制）
+            view_counter = view_counter + 1;
+            if mod(view_counter-1, save_every_n_views) == 0
+                try
+                    ts = datestr(now,'yyyy-mm-dd_HH-MM-SS');
+                    recon_fn = fullfile(output_dir, sprintf('recon_theta_%d_phi_%d_%s.png', round(theta_range(i)), round(phi_range(j)), ts));
+                    if enable_imwrite
+                        img = uint8(255 * mat2gray(recon_intensity));
+                        imwrite(img, recon_fn);
+                    else
+                        fig = figure('Visible','off'); imagesc(recon_intensity); axis image; colormap gray; colorbar; saveas(fig, recon_fn); close(fig);
+                    end
+                    fprintf('  ✓ 已保存再现像: %s\n', recon_fn);
+                catch E
+                    fprintf('  Warning: 保存再现像失败: %s\n', E.message);
+                end
+            end
+
+            fprintf('  ✓ 视角 (θ=%.0f°, φ=%.0f°) 再现完成\n', theta_range(i), phi_range(j));
+        end
+    end
+end
+
+% 关闭 parpool（如果我们创建了它）
+if exist('pool_created','var') && pool_created
+    try
+        poolobj = gcp('nocreate');
+        if ~isempty(poolobj)
+            delete(poolobj);
+        end
+    catch
+        % ignore
     end
 end
 
@@ -208,42 +361,4 @@ fprintf('\n  ✓ 参数日志已保存: %s\n', log_file);
 fprintf('\n========== 程序执行完成 ==========\n');
 fprintf('输出目录: %s\n\n', output_dir);
 
-%% ==================== 嵌入式辅助函数 ====================
-
-%% 计算参考光场
-function ref_field = compute_reference_field(theta_ref, phi_ref, lambda, x_holo, y_holo)
-    % 参考光为离轴平面波
-    % theta_ref: 方位角 (rad)
-    % phi_ref: 仰角 (rad)
-    
-    k = 2*pi/lambda;
-    
-    % 参考光传播方向的波矢
-    kx_ref = k * sin(phi_ref) * cos(theta_ref);
-    ky_ref = k * sin(phi_ref) * sin(theta_ref);
-    
-    % 二维矩阵化
-    [X, Y] = ndgrid(x_holo, y_holo);
-    
-    % 参考光复振幅（单位振幅）
-    ref_field = exp(1i * (kx_ref * X + ky_ref * Y));
-end
-
-%% 计算再现光场
-function recon_field = compute_reconstruction_field(theta_view, phi_view, lambda, x_holo, y_holo)
-    % 再现光为平面波，与参考光波长相同
-    
-    k = 2*pi/lambda;
-    
-    % 再现光传播方向的波矢
-    kx_view = k * sin(phi_view) * cos(theta_view);
-    ky_view = k * sin(phi_view) * sin(theta_view);
-    
-    % 二维矩阵化
-    [X, Y] = ndgrid(x_holo, y_holo);
-    
-    % 再现光复振幅
-    recon_field = exp(1i * (kx_view * X + ky_view * Y));
-end
-
-end
+% (辅助函数已移到独立文件：compute_reference_field.m 和 compute_reconstruction_field.m)

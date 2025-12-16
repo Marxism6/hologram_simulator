@@ -7,7 +7,7 @@ function config = get_custom_config()
     
     config.lambda = 632.8e-9;              % 波长 (m)
     config.object_center = [0, 0, 100e-3]; % 物体中心
-    config.cube_size = 5e-3;               % 立方体边长，设为0可禁用立方体
+    config.cube_size = 0e-3;               % 立方体边长，设为0可禁用立方体
     config.sphere_radius = 2e-3;           % 球体半径，设为0可禁用球体
     config.object_amplitude = 0.8;         % 振幅透射率
     config.object_phase = pi/4;            % 相位延迟

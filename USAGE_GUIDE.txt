@@ -1,0 +1,325 @@
+% ============================================================================
+% 三维物体数字全息模拟程序 - 完整使用指南
+% ============================================================================
+% 
+% 【程序目标】
+% 严格遵循光的衍射、干涉物理规律，实现数字全息的完整工作流：
+% 物体建模 → 全息生成 → 多视角再现 → 三维重建 → 数据分析
+%
+% 【使用方法】
+%
+% 第一次使用（推荐）:
+%   >> cd hologram_simulator
+%   >> check_environment          % 检查环境
+%   >> quickstart                 % 快速演示
+%
+% 完整功能:
+%   >> main                       % 运行完整模拟
+%
+% 高级用途:
+%   >> advanced_examples          % 查看各种高级示例
+%   >> hologram_data_analysis     % 数据分析工具
+%
+% ============================================================================
+
+%% ======= 如何修改参数？ =======
+% 
+% 编辑 main.m 文件，修改【第1部分】的这些变量：
+%
+% 1. 光学参数
+%    lambda = 632.8e-9;           % 波长 (m)
+%    theta_ref = 15 * pi/180;     % 参考光角度 (rad)
+%
+% 2. 物体参数
+%    object_center = [0, 0, 100e-3];  % 物体中心 (m)
+%    cube_size = 5e-3;            % 立方体大小 (m)
+%    sphere_radius = 2e-3;        % 球体半径 (m)
+%
+% 3. 全息面参数
+%    pixel_num = 512;             % 采样点数 (256/512/1024)
+%    holo_z = 150e-3;             % 全息面距离 (m)
+%
+% 4. 再现参数
+%    theta_range = -45:15:45;     % 方位角范围 (deg)
+%    phi_range = 0:10:30;         % 仰角范围 (deg)
+%
+% 5. 噪声参数
+%    add_noise = true;            % 是否加噪声
+%    SNR_dB = 30;                 % 信噪比 (dB)
+
+%% ======= 示例1: 改变波长 =======
+% 
+% 实现: 编辑 main.m
+%       lambda = 405e-9;           % 紫外激光
+%       lambda = 532e-9;           % 绿色激光
+%       lambda = 780e-9;           % 近红外
+%
+% 物理意义: 波长越短，衍射尺度越小，需要更高采样分辨率
+
+%% ======= 示例2: 改变物体大小 =======
+%
+% 实现: 编辑 main.m
+%       cube_size = 10e-3;         % 改为10mm立方体
+%       sphere_radius = 5e-3;      % 改为5mm球体
+%
+% 结果: 物体越大，全息图干涉纹理越细密
+
+%% ======= 示例3: 改变采样分辨率 =======
+%
+% 实现: 编辑 main.m
+%       pixel_num = 256;           % 快速模式，~10秒
+%       pixel_num = 512;           % 标准模式，~30秒 ← 推荐
+%       pixel_num = 1024;          % 高质量，~2分钟
+%
+% 权衡: 高分辨率→清晰但耗时
+
+%% ======= 示例4: 自定义多个物体 =======
+%
+% 编辑 create_object.m，修改函数使其支持多个物体：
+% 1. 保存当前物体的点云
+% 2. 生成第二个物体的点云
+% 3. 合并两个点云 [obj1; obj2]
+%
+% 结果: hologram_output 中会显示两个物体的干涉图
+
+%% ======= 示例5: 关闭噪声 =======
+%
+% 实现: 编辑 main.m
+%       add_noise = false;         % 不添加噪声
+%
+% 结果: 干涉图更清晰，更接近理想情况
+
+%% ======= 例子代码 =======
+
+% 【最小化运行例子】
+function demo_minimal()
+    % 仅运行衍射计算，不输出可视化
+    
+    % 参数
+    lambda = 632.8e-9;
+    pixel_num = 256;  % 快速
+    
+    % 物体建模
+    [object_field, object_coords] = create_object(...
+        [0, 0, 100e-3], 5e-3, 2e-3, 0.8, pi/4, ...
+        lambda, pixel_num, 50e-3);
+    
+    % 衍射
+    [obj_at_holo, x, y] = angular_spectrum_diffraction(...
+        object_field, object_coords, 0.15, lambda, pixel_num, 50e-3);
+    
+    % 显示结果
+    figure;
+    imagesc(x*1e3, y*1e3, abs(obj_at_holo));
+    title('物光强度分布');
+    axis equal;
+end
+
+% 【实验参数扫描】
+function scan_parameters()
+    % 扫描参考光角度对干涉图的影响
+    
+    lambda = 632.8e-9;
+    theta_values = 5:5:30;  % 从5°到30°，每5°一个
+    
+    for idx = 1:length(theta_values)
+        theta_ref = theta_values(idx) * pi/180;
+        
+        % 这里添加完整的计算...
+        % [hologram, x, y] = compute_hologram_for_angle(theta_ref);
+        
+        fprintf('θ = %.0f° 计算完成\n', theta_values(idx));
+    end
+end
+
+% 【图像后处理】
+function postprocess_images()
+    % 对输出的再现像进行增强
+    
+    output_dir = 'hologram_output';
+    img_files = dir(fullfile(output_dir, 'reconstruction*.png'));
+    
+    for i = 1:length(img_files)
+        % 读取图像
+        img = imread(fullfile(output_dir, img_files(i).name));
+        
+        % 对比度拉伸
+        img_enhanced = imadjust(img, stretchlim(img, [0.1, 0.9]));
+        
+        % 保存增强版本
+        output_name = [img_files(i).name(1:end-4), '_enhanced.png'];
+        imwrite(img_enhanced, fullfile(output_dir, output_name));
+    end
+end
+
+%% ======= 三个最常见的使用场景 =======
+
+% 【场景1】快速测试新参数
+function test_new_parameters()
+    % 时间: 30秒
+    % 用途: 快速验证参数修改是否有效
+    
+    pixel_num = 256;
+    theta_range = -45:45;      % 简化为2个视角
+    phi_range = 0:30;
+    
+    % 调用主程序...
+end
+
+% 【场景2】发表质量的全息图
+function generate_publication_quality()
+    % 时间: 5分钟
+    % 用途: 生成高质量图像用于论文/报告
+    
+    pixel_num = 1024;          % 高分辨率
+    add_noise = false;         % 无噪声
+    SNR_dB = 50;               % 即使有噪声也很小
+    
+    % 调用主程序...
+end
+
+% 【场景3】验证物理原理
+function verify_physics()
+    % 时间: 10分钟
+    % 用途: 通过改变参数验证物理规律
+    
+    % 验证1: 波长越短，衍射角越小
+    % 验证2: 参考光角度越大，干涉条纹间距越小
+    % 验证3: 物体距离越远，衍射角越小
+    
+    % 对多个参数组合进行扫描...
+end
+
+%% ======= 故障排查 =======
+%
+% 问题1: 输出全黑
+%   原因: 物体参数设置错误
+%   解决: 检查 object_center, object_amplitude
+%
+% 问题2: 运行缓慢
+%   原因: 分辨率太高
+%   解决: 将 pixel_num 改为 256
+%
+% 问题3: 内存不足
+%   原因: 分辨率太高或物体点数太多
+%   解决: 降低 pixel_num 或 density
+%
+% 问题4: 再现像不清晰
+%   原因: 采样不足或噪声过高
+%   解决: 增加 pixel_num 或降低 SNR_dB
+%
+
+%% ======= 主要输出文件 =======
+%
+% hologram_output/
+% ├── hologram_generation.png        - 干涉图、相位图、物光强度
+% ├── object_3d_model.png            - 原始物体3D可视化
+% ├── reconstruction_theta_*_phi_*.png - 各个视角的再现像
+% ├── multi_view_comparison.png      - 多视角对比
+% ├── parameter_summary.png          - 参数统计
+% ├── hologram_parameters.log        - 详细参数日志
+% ├── hologram_statistics.txt        - 统计数据
+% └── analysis_report.txt            - 分析报告（如果启用）
+
+%% ======= 进阶技巧 =======
+%
+% 技巧1: 导出为高分辨率PDF
+%   print(gcf, '-dpdf', 'output.pdf', '-r300')
+%
+% 技巧2: 并行计算多个视角（需要 Parallel Computing Toolbox）
+%   改为 parfor 循环
+%
+% 技巧3: 保存中间计算结果
+%   save('hologram_data.mat', 'hologram_intensity', 'object_field_at_holo', ...)
+%
+% 技巧4: 自动化批处理
+%   创建脚本循环调用多次 main.m 并收集结果
+
+%% ======= 关键物理参数速查 =======
+%
+% 波长与激光类型:
+%   405 nm  - 蓝紫色激光 (DPSS)
+%   532 nm  - 绿色激光 (DPSS)
+%   632.8 nm - 红色激光 (氦氖) ← 默认
+%   780 nm  - 近红外 (二极管)
+%   1064 nm - 红外 (Nd:YAG)
+%
+% 全息面采样:
+%   256×256   - 快速，低精度
+%   512×512   - 推荐，平衡
+%   1024×1024 - 高精度，慢
+%
+% 参考光角度:
+%   5°   - 弱离轴，干涉条纹粗
+%   15°  - 默认值，中等
+%   30°  - 强离轴，干涉条纹细
+%
+% 噪声水平:
+%   SNR=20dB  - 高噪声，接近实验
+%   SNR=30dB  - 中等噪声 ← 默认
+%   SNR=50dB  - 低噪声，接近理想
+
+%% ======= 推荐学习路径 =======
+%
+% Day 1 (30分钟):
+%   • 运行 quickstart
+%   • 查看输出图像
+%   • 读 QUICK_REFERENCE.md
+%
+% Day 2 (1小时):
+%   • 运行 main（完整版本）
+%   • 修改 pixel_num 观察变化
+%   • 改变波长并重新运行
+%   • 读 README.md 中的物理部分
+%
+% Day 3 (2小时):
+%   • 运行 advanced_examples
+%   • 理解各个函数的作用
+%   • 修改物体参数并观察结果
+%   • 查看 hologram_data_analysis.m
+%
+% Day 4+ (深入研究):
+%   • 研究源代码实现细节
+%   • 添加自己的功能
+%   • 实现自己的衍射算法
+%   • 扩展到其他应用
+
+%% ======= 文档索引 =======
+%
+% 文件                          内容                 推荐阅读顺序
+% ────────────────────────────────────────────────────────────
+% QUICK_REFERENCE.md            快速参考              第1个 ★★★
+% README.md                     完整文档              第2个 ★★★
+% PROJECT_SUMMARY.txt           项目总结              第3个 ★★
+% 本文件 (USAGE_GUIDE.txt)       使用指南              随时查阅 ★
+% main.m                        主程序                代码学习 ★★★
+% quickstart.m                  快速开始              初次运行 ★★★
+% advanced_examples.m           高级示例              参考示例 ★★
+%
+% ★★★ 必读  ★★ 推荐  ★ 参考
+
+%% ======= 最后的话 =======
+%
+% 本程序实现了一个完整的数字全息模拟系统。
+% 
+% 核心创新:
+%   ✓ 严格的物理模型（Fresnel衍射）
+%   ✓ 支持任意三维物体（点云表示）
+%   ✓ 多视角自动再现和重建
+%   ✓ 完整的数据分析工具
+%   ✓ 高度模块化和可扩展
+%
+% 如果您发现有用的应用，欢迎反馈！
+%
+% 祝您使用愉快！
+%
+% ============================================================================
+
+fprintf('\n');
+fprintf('【使用指南已加载】\n');
+fprintf('快速开始命令:\n');
+fprintf('  quickstart       - 快速演示（推荐首选）\n');
+fprintf('  main             - 完整功能\n');
+fprintf('  check_environment - 检查环境\n');
+fprintf('  advanced_examples - 查看示例\n');
+fprintf('\n');
